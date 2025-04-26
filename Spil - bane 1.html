@@ -1,0 +1,765 @@
+<!DOCTYPE html>
+<html lang="da">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CodeName: Chaos </title>
+    <style>
+        body { margin: 0; overflow: hidden; }
+        canvas { display: block; background: #87CEEB; }
+        #restartButton {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            padding: 10px 20px;
+            font-size: 20px;
+            display: none;
+            z-index: 10;
+        }
+         #startScreen {
+             position: absolute;
+             top: 0;
+             left: 0;
+             width: 100%;
+             height: 100%;
+             background-color: #87CEEB;
+             display: flex;
+             flex-direction: column;
+             justify-content: center;
+             align-items: center;
+             text-align: center;
+             z-index: 10;
+         }
+         #startScreen h1 {
+             font-size: 48px;
+             margin-bottom: 20px;
+         }
+         #startScreen p {
+             font-size: 20px;
+             margin-bottom: 30px;
+             max-width: 600px;
+         }
+         #startScreen button {
+             padding: 15px 30px;
+             font-size: 24px;
+             cursor: pointer;
+         }
+         #winScreen {
+             position: absolute;
+             top: 0;
+             left: 0;
+             width: 100%;
+             height: 100%;
+             background-color: #87CEEB;
+             display: none;
+             flex-direction: column;
+             justify-content: center;
+             align-items: center;
+             text-align: center;
+             z-index: 10;
+         }
+         #winScreen p {
+              font-family: 'Courier New', Courier, monospace;
+              font-size: 24px;
+              margin-bottom: 30px;
+              color: green;
+         }
+          #winScreen button {
+              padding: 15px 30px;
+              font-size: 24px;
+              cursor: pointer;
+          }
+    </style>
+</head>
+<body>
+    <div id="startScreen">
+        <h1>CODE NAME: Chaos</h1>
+        <p>Velkommen til din mission, soldat. Du bliver droppet ned i fjendtligt territorium og skal forsøge at finde nøglen, s&aring; du kan komme ind p&aring; fjendens base. Du har intet v&aring;ben til at starte med, men det er din mission at finde et v&aring;ben (i en brun kasse), finde n&oslash;glen og infiltrere basen. Held og lykke.</p>
+        <p>(Du styrer med WASD, sigter med musen og skyder med venstre musetast).</p>
+        <button id="startButton">Start spil</button>
+    </div>
+
+     <div id="winScreen">
+         <p id="winMessage">Godt g&aring;et soldat! Du er nu klar til at infiltrere basen</p>
+         <button id="continueButton">Videre</button>
+     </div>
+
+
+    <canvas id="gameCanvas"></canvas>
+    <button id="restartButton" onclick="restartGame()">Genstart</button>
+    <script>
+        const canvas = document.getElementById("gameCanvas");
+        const ctx = canvas.getContext("2d");
+        const restartButton = document.getElementById("restartButton");
+         const startScreen = document.getElementById("startScreen");
+         const startButton = document.getElementById("startButton");
+         const winScreen = document.getElementById("winScreen");
+         const continueButton = document.getElementById("continueButton");
+
+
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+
+        let player, enemies, obstacles, paths, ammoPickups, weaponPickup, keyItem, score;
+        let gameState = 'start'; // 'start', 'introAnimation', 'playing', 'gameOver', 'win'
+        let plane = { x: -100, y: 100, speed: 5, size: 50 };
+        let dropPoint = null;
+
+
+        function initializeGame() {
+            player = {
+                x: -100,
+                y: -100,
+                size: 40,
+                speed: 3,
+                bullets: [],
+                hp: 100,
+                ammo: 0,
+                score: 0,
+                 hasWeapon: false
+            };
+
+            obstacles = [
+                { x: 200, y: 200, width: 100, height: 100 },
+                { x: 400, y: 300, width: 150, height: 150 },
+                { x: 600, y: 100, width: 120, height: 200 },
+                { x: 800, y: 400, width: 150, height: 200 },
+                { x: 1000, y: 200, width: 120, height: 150 },
+                { x: 300, y: 500, width: 130, height: 160 },
+                { x: 700, y: 600, width: 180, height: 180 },
+                { x: 50, y: 50, width: 200, height: 200 }
+            ];
+
+            paths = [
+                { x: 100, y: 100, width: 600, height: 50 },
+                { x: 250, y: 250, width: 500, height: 50 },
+                { x: 50, y: 400, width: 700, height: 50 }
+            ];
+
+            enemies = [];
+            for (let i = 0; i < 5; i++) {
+                let enemyX, enemyY;
+                do {
+                    enemyX = Math.random() * canvas.width;
+                    enemyY = Math.random() * canvas.height;
+                } while (isCollidingWithObstacles({x: enemyX, y: enemyY, width: 40, height: 40}));
+
+                enemies.push({
+                    x: enemyX,
+                    y: enemyY,
+                    size: 40,
+                    speed: 2,
+                    bullets: [],
+                    hp: 100,
+                    maxHp: 100,
+                    state: "patrol",
+                    lastStateChange: 0,
+                    targetX: null,
+                    targetY: null,
+                    hidingSpot: null,
+                    lastShotTime: 0,
+                    cooldown: 1500 + Math.random() * 1000,
+                    avoiding: false,
+                    avoidAngle: 0
+                });
+            }
+
+            ammoPickups = [];
+             for (let i = 0; i < 3; i++) {
+                let pickupX, pickupY;
+                do {
+                     pickupX = Math.random() * canvas.width;
+                     pickupY = Math.random() * canvas.height;
+                 } while (isCollidingWithObstacles({x: pickupX, y: pickupY, width: 20, height: 20}));
+
+                 ammoPickups.push({
+                     x: pickupX,
+                     y: pickupY,
+                     size: 20,
+                     ammoAmount: 20,
+                     scoreValue: 25
+                 });
+             }
+
+             let weaponX, weaponY;
+             do {
+                 weaponX = Math.random() * canvas.width;
+                 weaponY = Math.random() * canvas.height;
+             } while (isCollidingWithObstacles({x: weaponX, y: weaponY, width: 30, height: 30}));
+             weaponPickup = { x: weaponX, y: weaponY, size: 30, collected: false };
+
+
+            keyItem = null;
+
+             do {
+                 dropPoint = { x: Math.random() * canvas.width, y: Math.random() * canvas.height };
+             } while (checkCollision(dropPoint.x, dropPoint.y, player.size));
+
+
+            restartButton.style.display = "none";
+             startScreen.style.display = "none";
+             winScreen.style.display = "none";
+
+             gameState = 'introAnimation';
+             plane.x = -plane.size;
+             plane.y = 100;
+             plane.speed = 5;
+
+             gameLoop();
+        }
+
+        const keys = {};
+        let mouseX = 0;
+        let mouseY = 0;
+        let mouseAngle = 0;
+        let gameTime = 0;
+
+        window.addEventListener("keydown", (e) => keys[e.key] = true);
+        window.addEventListener("keyup", (e) => keys[e.key] = false);
+        window.addEventListener("mousemove", (e) => {
+            mouseX = e.clientX;
+            mouseY = e.clientY;
+            if (gameState === 'playing') {
+                 mouseAngle = Math.atan2(mouseY - (player.y + player.size / 2), mouseX - (player.x + player.size / 2));
+            }
+        });
+        window.addEventListener("mousedown", () => {
+            if (gameState === 'playing' && player.hasWeapon && player.ammo > 0) {
+                player.bullets.push({
+                     x: player.x + player.size / 2,
+                     y: player.y + player.size / 2,
+                     angle: mouseAngle,
+                     speed: 5
+                     });
+                player.ammo--;
+            }
+        });
+
+         startButton.addEventListener("click", () => {
+             initializeGame();
+         });
+
+         continueButton.addEventListener("click", () => {
+             // Gå til bane 2
+             window.location.href = 'Spil_Bane2.html';
+         });
+
+
+        function checkCollision(x, y, size) {
+            for (let obs of obstacles) {
+                if (x < obs.x + obs.width && x + size > obs.x &&
+                    y < obs.y + obs.height && y + size > obs.y) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+         function isCollidingWithObstacles(rect) {
+             for (let obs of obstacles) {
+                 if (rect.x < obs.x + obs.width && rect.x + rect.width > obs.x &&
+                     rect.y < obs.y + obs.height && rect.y + rect.height > obs.y) {
+                     return true;
+                 }
+             }
+             return false;
+         }
+
+
+        function checkBulletCollision(bullet) {
+             const bulletRect = { x: bullet.x, y: bullet.y, width: 5, height: 5 };
+             return isCollidingWithObstacles(bulletRect);
+        }
+
+        function checkEnemyBulletCollision(bullet) {
+            if (bullet.x < player.x + player.size && bullet.x + 5 > player.x &&
+                bullet.y < player.y + player.size && bullet.y + 5 > player.y) {
+                return true;
+            }
+            return false;
+        }
+
+        function findNearestHidingSpot(enemy) {
+            let nearestObstacle = null;
+            let shortestDistance = Infinity;
+
+            for (let obs of obstacles) {
+                const obsCenterX = obs.x + obs.width / 2;
+                const obsCenterY = obs.y + obs.height / 2;
+
+                const distance = Math.hypot(obsCenterX - enemy.x, obsCenterY - enemy.y);
+                if (distance < shortestDistance) {
+                    shortestDistance = distance;
+                    nearestObstacle = obs;
+                }
+            }
+
+            if (nearestObstacle) {
+                const vectorX = nearestObstacle.x + nearestObstacle.width / 2 - player.x;
+                const vectorY = nearestObstacle.y + nearestObstacle.height / 2 - player.y;
+                const length = Math.hypot(vectorX, vectorY);
+                const normalizedX = vectorX / length;
+                const normalizedY = vectorY / length;
+
+                const hidingX = nearestObstacle.x + nearestObstacle.width / 2 + normalizedX * (nearestObstacle.width / 2 + 20);
+                const hidingY = nearestObstacle.y + nearestObstacle.height / 2 + normalizedY * (nearestObstacle.height / 2 + 20);
+                return { x: hidingX, y: hidingY, obstacle: nearestObstacle };
+            }
+
+            return null;
+        }
+
+        function isHiddenFromPlayer(enemy) {
+            const dx = player.x - enemy.x;
+            const dy = player.y - enemy.y;
+            const distance = Math.hypot(dx, dy);
+            const steps = Math.ceil(distance / 10);
+            for (let i = 1; i < steps; i++) {
+                const checkX = enemy.x + (dx * i) / steps;
+                const checkY = enemy.y + (dy * i) / steps;
+                for (let obs of obstacles) {
+                    if (checkX >= obs.x && checkX <= obs.x + obs.width &&
+                        checkY >= obs.y && checkY <= obs.y + obs.height) {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+
+        function moveEnemy(enemy) {
+            gameTime++;
+            const distanceToPlayer = Math.hypot(player.x - enemy.x, player.y - enemy.y);
+            const angleToPlayer = Math.atan2(player.y - enemy.y, player.x - enemy.x);
+            const canSeePlayer = !isHiddenFromPlayer(enemy);
+            const threatDistance = 400;
+            const attackDistance = 250;
+
+            if (gameTime - enemy.lastStateChange > 120 && !enemy.avoiding) {
+                const rand = Math.random();
+                if (distanceToPlayer < threatDistance && canSeePlayer) {
+                    if (enemy.hp < enemy.maxHp * 0.5 || rand < 0.6) {
+                        enemy.state = "hide";
+                        enemy.hidingSpot = findNearestHidingSpot(enemy);
+                    } else if (rand < 0.8) {
+                        enemy.state = "attack";
+                    } else {
+                        enemy.state = "patrol";
+                        const angle = Math.random() * Math.PI * 2;
+                        const distance = 100 + Math.random() * 200;
+                        enemy.targetX = enemy.x + Math.cos(angle) * distance;
+                        enemy.targetY = enemy.y + Math.sin(angle) * distance;
+                    }
+                } else if (distanceToPlayer < threatDistance * 1.5) {
+                    if (isHiddenFromPlayer(enemy) && rand < 0.7) {
+                         enemy.state = "ambush";
+                    } else {
+                        enemy.state = "chase";
+                    }
+                } else {
+                    enemy.state = "patrol";
+                    const angle = Math.random() * Math.PI * 2;
+                    const distance = 100 + Math.random() * 200;
+                    enemy.targetX = enemy.x + Math.cos(angle) * distance;
+                    enemy.targetY = enemy.y + Math.sin(angle) * distance;
+                }
+
+                enemy.lastStateChange = gameTime;
+            }
+
+            let moveX = 0;
+            let moveY = 0;
+            let targetAngle = 0;
+
+            switch (enemy.state) {
+                case "chase":
+                    if (distanceToPlayer > attackDistance) {
+                         targetAngle = angleToPlayer;
+                    } else {
+                         targetAngle = angleToPlayer + Math.PI / 2;
+                    }
+                    break;
+                case "hide":
+                    if (enemy.hidingSpot) {
+                        targetAngle = Math.atan2(enemy.hidingSpot.y - enemy.y, enemy.hidingSpot.x - enemy.x);
+                         const distToHiding = Math.hypot(enemy.hidingSpot.x - enemy.x, enemy.hidingSpot.y - enemy.y);
+                         if (distToHiding < 20) {
+                             enemy.state = "ambush";
+                             enemy.lastStateChange = gameTime;
+                         }
+                    } else {
+                        enemy.state = "patrol";
+                    }
+                    break;
+                case "ambush":
+                     if (canSeePlayer && Date.now() - enemy.lastShotTime > enemy.cooldown) {
+                         enemy.bullets.push({ x: enemy.x, y: enemy.y, angle: angleToPlayer, speed: 4 });
+                         enemy.lastShotTime = Date.now();
+                     }
+                    return;
+                case "attack":
+                    if (distanceToPlayer > attackDistance / 2) {
+                         targetAngle = angleToPlayer;
+                    }
+
+                    if (canSeePlayer && Date.now() - enemy.lastShotTime > enemy.cooldown * 0.7) {
+                         enemy.bullets.push({ x: enemy.x, y: enemy.y, angle: angleToPlayer, speed: 4 });
+                         enemy.lastShotTime = Date.now();
+                    }
+                    break;
+                case "patrol":
+                    if (enemy.targetX !== null && enemy.targetY !== null) {
+                        targetAngle = Math.atan2(enemy.targetY - enemy.y, enemy.targetX - enemy.x);
+                        const distToTarget = Math.hypot(enemy.targetX - enemy.x, enemy.targetY - enemy.y);
+                        if (distToTarget < 20) {
+                            enemy.targetX = null;
+                            enemy.targetY = null;
+                        }
+                    } else {
+                        const angle = Math.random() * Math.PI * 2;
+                        const distance = 100 + Math.random() * 200;
+                        enemy.targetX = enemy.x + Math.cos(angle) * distance;
+                        enemy.targetY = enemy.y + Math.sin(angle) * distance;
+                    }
+
+                     if (canSeePlayer && Date.now() - enemy.lastShotTime > enemy.cooldown * 2 && Math.random() < 0.3) {
+                         enemy.bullets.push({ x: enemy.x, y: enemy.y, angle: angleToPlayer, speed: 4 });
+                         enemy.lastShotTime = Date.now();
+                     }
+                    break;
+            }
+
+            let currentMoveX = Math.cos(targetAngle) * enemy.speed;
+            let currentMoveY = Math.sin(targetAngle) * enemy.speed;
+            let newX = enemy.x + currentMoveX;
+            let newY = enemy.y + currentMoveY;
+
+            const potentialEnemyRect = { x: newX, y: newY, width: enemy.size, height: enemy.size };
+
+            if (isCollidingWithObstacles(potentialEnemyRect)) {
+                 if (!enemy.avoiding) {
+                     enemy.avoiding = true;
+                     enemy.avoidAngle = targetAngle + Math.PI / 2 * (Math.random() < 0.5 ? 1 : -1);
+                 }
+                 moveX = Math.cos(enemy.avoidAngle) * enemy.speed;
+                 moveY = Math.sin(enemy.avoidAngle) * enemy.speed;
+                 newX = enemy.x + moveX;
+                 newY = enemy.y + moveY;
+
+                 const avoidedEnemyRect = { x: newX, y: newY, width: enemy.size, height: enemy.size };
+
+                 if (isCollidingWithObstacles(avoidedEnemyRect)) {
+                      enemy.avoidAngle = targetAngle + Math.PI / 2 * (enemy.avoidAngle === targetAngle + Math.PI / 2 ? -1 : 1);
+                      moveX = Math.cos(enemy.avoidAngle) * enemy.speed;
+                      moveY = Math.sin(enemy.avoidAngle) * enemy.speed;
+                      newX = enemy.x + moveX;
+                      newY = enemy.y + moveY;
+                      const secondAvoidedEnemyRect = { x: newX, y: newY, width: enemy.size, height: enemy.size };
+                      if (isCollidingWithObstacles(secondAvoidedEnemyRect)) {
+                          moveX = 0;
+                          moveY = 0;
+                      }
+                  }
+
+            } else {
+                enemy.avoiding = false;
+                moveX = currentMoveX;
+                moveY = currentMoveY;
+            }
+
+
+             let finalX = enemy.x + moveX;
+             let finalY = enemy.y + moveY;
+             finalX = Math.max(0, Math.min(canvas.width - enemy.size, finalX));
+             finalY = Math.max(0, Math.min(canvas.height - enemy.size, finalY));
+
+             if (!isCollidingWithObstacles({ x: finalX, y: enemy.y, width: enemy.size, height: enemy.size })) {
+                 enemy.x = finalX;
+             }
+             if (!isCollidingWithObstacles({ x: enemy.x, y: finalY, width: enemy.size, height: enemy.size })) {
+                  enemy.y = finalY;
+              }
+
+
+            enemy.bullets.forEach((bullet, index) => {
+                bullet.x += Math.cos(bullet.angle) * bullet.speed;
+                bullet.y += Math.sin(bullet.angle) * bullet.speed;
+
+                if (checkBulletCollision(bullet)) {
+                    enemy.bullets.splice(index, 1);
+                }
+            });
+        }
+
+        function update() {
+
+            if (gameState === 'introAnimation') {
+                 plane.x += plane.speed;
+                 if (plane.x >= dropPoint.x - plane.size / 2 && plane.x - plane.speed < dropPoint.x - plane.size / 2) {
+                     player.x = dropPoint.x - player.size / 2;
+                     player.y = dropPoint.y - player.size / 2;
+                 }
+                 if (plane.x > canvas.width) {
+                     gameState = 'playing';
+                 }
+                 return;
+            }
+
+
+            let newX = player.x;
+            let newY = player.y;
+
+            if (keys['w'] && !checkCollision(player.x, player.y - player.speed, player.size)) newY -= player.speed;
+            if (keys['s'] && !checkCollision(player.x, player.y + player.speed, player.size)) newY += player.speed;
+            if (keys['a'] && !checkCollision(player.x - player.speed, player.y, player.size)) newX -= player.speed;
+            if (keys['d'] && !checkCollision(player.x + player.speed, player.y, player.size)) newX += player.speed;
+
+             const playerRect = { x: newX, y: player.y, width: player.size, height: player.size };
+             if (!isCollidingWithObstacles(playerRect)) {
+                 player.x = Math.max(0, Math.min(canvas.width - player.size, newX));
+             }
+
+             const playerRectY = { x: player.x, y: newY, width: player.size, height: player.size };
+              if (!isCollidingWithObstacles(playerRectY)) {
+                 player.y = Math.max(0, Math.min(canvas.height - player.size, newY));
+              }
+
+
+            player.bullets.forEach((bullet, index) => {
+                bullet.x += Math.cos(bullet.angle) * bullet.speed;
+                bullet.y += Math.sin(bullet.angle) * bullet.speed;
+
+                if (checkBulletCollision(bullet)) {
+                    player.bullets.splice(index, 1);
+                }
+            });
+
+             if (weaponPickup && !weaponPickup.collected && player.x < weaponPickup.x + weaponPickup.size && player.x + player.size > weaponPickup.x &&
+                 player.y < weaponPickup.y + weaponPickup.size && player.y + player.size > weaponPickup.y) {
+                 player.hasWeapon = true;
+                 weaponPickup.collected = true;
+                 player.ammo += 50;
+             }
+
+
+            ammoPickups.forEach((pickup, index) => {
+                if (player.x < pickup.x + pickup.size && player.x + player.size > pickup.x &&
+                    player.y < pickup.y + pickup.size && player.y + pickup.size > pickup.y) {
+                    player.ammo += pickup.ammoAmount;
+                    player.score += pickup.scoreValue;
+                    ammoPickups.splice(index, 1);
+                     let newPickupX, newPickupY;
+                     do {
+                         newPickupX = Math.random() * canvas.width;
+                         newPickupY = Math.random() * canvas.height;
+                     } while (isCollidingWithObstacles({x: newPickupX, y: newPickupY, width: 20, height: 20}));
+                     ammoPickups.push({
+                         x: newPickupX,
+                         y: newPickupY,
+                         size: 20,
+                         ammoAmount: 20,
+                         scoreValue: 25
+                     });
+                      while(ammoPickups.length > 5) {
+                          ammoPickups.shift();
+                      }
+                }
+            });
+
+             if (keyItem && !keyItem.collected && player.x < keyItem.x + keyItem.size && player.x + player.size > keyItem.x &&
+                 player.y < keyItem.y + keyItem.size && player.y + keyItem.size > keyItem.y) {
+                 keyItem.collected = true;
+                 gameState = 'win';
+                 winScreen.style.display = "flex";
+             }
+
+
+            enemies.forEach((enemy, enemyIndex) => {
+                moveEnemy(enemy);
+                enemy.bullets.forEach((bullet, bulletIndex) => {
+                    bullet.x += Math.cos(bullet.angle) * bullet.speed;
+                    bullet.y += Math.sin(bullet.angle) * bullet.speed;
+
+                    if (checkEnemyBulletCollision(bullet)) {
+                        player.hp -= 25;
+                        enemy.bullets.splice(bulletIndex, 1);
+                    }
+
+                    if (checkBulletCollision(bullet)) {
+                        enemy.bullets.splice(bulletIndex, 1);
+                    }
+                });
+
+                player.bullets.forEach((bullet, bulletIndex) => {
+                    if (bullet.x < enemy.x + enemy.size && bullet.x + 5 > enemy.x &&
+                        bullet.y < enemy.y + enemy.size && bullet.y + 5 > enemy.y) {
+                        enemy.hp -= 25;
+                        player.bullets.splice(bulletIndex, 1);
+                        if (enemy.hp <= 0) {
+                            player.score += 100;
+                             const defeatedEnemy = enemies.splice(enemyIndex, 1)[0];
+
+                             if (enemies.length === 0) {
+                                  let keyX, keyY;
+                                  keyX = defeatedEnemy.x + defeatedEnemy.size / 2 - 15;
+                                  keyY = defeatedEnemy.y + defeatedEnemy.size / 2 - 15;
+
+                                   const keyRect = { x: keyX, y: keyY, width: 30, height: 30 };
+                                  while (isCollidingWithObstacles(keyRect)) {
+                                       keyX = Math.random() * canvas.width;
+                                       keyY = Math.random() * canvas.height;
+                                       keyRect.x = keyX;
+                                       keyRect.y = keyY;
+                                   }
+
+                                  keyItem = { x: keyX, y: keyY, size: 30, collected: false };
+                             }
+
+                        }
+                    }
+                });
+            });
+
+
+            if (player.hp <= 0) {
+                gameState = 'gameOver';
+                restartButton.style.display = "block";
+            }
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = "#C2B280";
+            paths.forEach(path => ctx.fillRect(path.x, path.y, path.width, path.height));
+
+            ctx.fillStyle = "gray";
+            obstacles.forEach(obs => ctx.fillRect(obs.x, obs.y, obs.width, obs.height));
+
+            if (gameState !== 'introAnimation') {
+                ctx.fillStyle = "green";
+                ctx.beginPath();
+                ctx.arc(player.x + player.size / 2, player.y + player.size / 2, player.size / 2, 0, Math.PI * 2);
+                ctx.fill();
+            }
+
+
+             if (gameState === 'introAnimation') {
+                 ctx.fillStyle = "darkgray";
+                 ctx.fillRect(plane.x, plane.y, plane.size * 2, plane.size);
+             } else {
+                 if (player.hasWeapon && gameState === 'playing') {
+                     ctx.strokeStyle = "rgba(0, 0, 0, 0.5)";
+                     ctx.lineWidth = 2;
+                     ctx.beginPath();
+                     ctx.moveTo(player.x + player.size / 2, player.y + player.size / 2);
+                     const lineLength = 30;
+                     const lineEndX = player.x + player.size / 2 + Math.cos(mouseAngle) * lineLength;
+                     const lineEndY = player.y + player.size / 2 + Math.sin(mouseAngle) * lineLength;
+                     ctx.lineTo(lineEndX, lineEndY);
+                     ctx.stroke();
+                 }
+             }
+
+
+
+            ctx.fillStyle = "red";
+            player.bullets.forEach(bullet => ctx.fillRect(bullet.x, bullet.y, 5, 5));
+
+             if (weaponPickup && !weaponPickup.collected) {
+                 ctx.fillStyle = "brown";
+                 ctx.fillRect(weaponPickup.x, weaponPickup.y, weaponPickup.size, weaponPickup.size);
+             }
+
+
+            ctx.fillStyle = "yellow";
+            ammoPickups.forEach(pickup => ctx.fillRect(pickup.x, pickup.y, pickup.size, pickup.size));
+
+             if (keyItem && !keyItem.collected) {
+                 ctx.fillStyle = "darkgray";
+                 ctx.fillRect(keyItem.x, keyItem.y, keyItem.size, keyItem.size);
+             }
+
+
+            enemies.forEach(enemy => {
+                if (!isHiddenFromPlayer(enemy) && gameState === 'playing') {
+                    switch(enemy.state) {
+                        case "chase":
+                            ctx.fillStyle = "blue";
+                            break;
+                        case "hide":
+                            ctx.fillStyle = "purple";
+                            break;
+                        case "ambush":
+                            ctx.fillStyle = "darkred";
+                            break;
+                        case "attack":
+                            ctx.fillStyle = "orange";
+                            break;
+                        case "patrol":
+                            ctx.fillStyle = "teal";
+                            break;
+                        default:
+                            ctx.fillStyle = "blue";
+                    }
+                    ctx.beginPath();
+                    ctx.arc(enemy.x + enemy.size / 2, enemy.y + enemy.size / 2, enemy.size / 2, 0, Math.PI * 2);
+                    ctx.fill();
+
+
+                    const hpBarWidth = enemy.size;
+                    const hpBarHeight = 5;
+                    const hpBarX = enemy.x;
+                    const hpBarY = enemy.y - hpBarHeight - 5;
+
+                    ctx.fillStyle = "red";
+                    ctx.fillRect(hpBarX, hpBarY, hpBarWidth, hpBarHeight);
+
+                    const currentHpWidth = (enemy.hp / enemy.maxHp) * hpBarWidth;
+                    ctx.fillStyle = "green";
+                    ctx.fillRect(hpBarX, hpBarY, currentHpWidth, hpBarHeight);
+                }
+
+
+                ctx.fillStyle = "yellow";
+                enemy.bullets.forEach(bullet => ctx.fillRect(bullet.x, bullet.y, 5, 5));
+            });
+
+             if (gameState === 'playing' || gameState === 'gameOver' || gameState === 'win') {
+                ctx.fillStyle = "black";
+                ctx.font = "16px Arial";
+                ctx.fillText(`HP: ${player.hp} | Ammo: ${player.ammo} | Fjender: ${enemies.length} | Score: ${player.score}`, 10, 20);
+             }
+        }
+
+        function gameLoop() {
+             if (gameState === 'start') {
+                 ctx.clearRect(0, 0, canvas.width, canvas.height);
+                 ctx.fillStyle = "#87CEEB";
+                 ctx.fillRect(0, 0, canvas.width, canvas.height);
+                 requestAnimationFrame(gameLoop);
+             } else if (gameState === 'playing' || gameState === 'introAnimation') {
+                update();
+                draw();
+                requestAnimationFrame(gameLoop);
+            } else if (gameState === 'gameOver') {
+                draw();
+            } else if (gameState === 'win') {
+                 draw();
+            }
+        }
+
+        function restartGame() {
+            initializeGame();
+        }
+
+         gameState = 'start';
+         startScreen.style.display = "flex";
+         gameLoop();
+
+
+    </script>
+</body>
+</html>
