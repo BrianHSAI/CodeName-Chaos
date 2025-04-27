@@ -1,0 +1,672 @@
+<!DOCTYPE html>
+<html lang="da">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CodeName: Chaos - Bane 2 (Shooting Back)</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #2c2c2c; }
+        canvas { display: block; background: #cccccc; }
+        #restartButton {
+            position: absolute;
+            top: 50%; /* Default centered */
+            left: 50%;
+            transform: translate(-50%, -50%); /* Default centered */
+            padding: 10px 20px;
+            font-size: 20px;
+            display: none;
+            z-index: 10;
+            cursor: pointer;
+            background-color: #555;
+            color: white;
+            border: none;
+            border-radius: 5px;
+        }
+        #restartButton:hover { background-color: #777; }
+        #startScreen { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0, 0, 0, 0.85); color: white; display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; z-index: 10; }
+        #startScreen h1 { font-size: 48px; margin-bottom: 20px; color: #eee; }
+        #startScreen p { font-size: 20px; margin-bottom: 30px; color: #ccc; line-height: 1.4; }
+        #startButton { padding: 15px 30px; font-size: 24px; cursor: pointer; background-color: #007bff; color: white; border: none; border-radius: 5px; }
+        #startButton:hover { background-color: #0056b3; }
+        .message-box {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 30px;
+            border-radius: 10px;
+            text-align: center;
+            z-index: 5;
+            font-size: 20px;
+            line-height: 1.5;
+            max-width: 80%;
+        }
+    </style>
+</head>
+<body>
+    <div id="startScreen">
+        <h1>CodeName: Chaos - Bane 2</h1>
+        <p>Mission: Find våbnet (W), eliminer 10 fjender (100 point/fjende).<br>
+           Pas på! Fjener skyder tilbage (-25 HP pr. hit)!<br>
+           Saml ammo (gule kasser: +20 ammo, +25 point).<br>
+           Saml brevet (✉) fra den sidste fjende for at vinde.</p>
+        <button id="startButton">Start Mission</button>
+    </div>
+
+    <canvas id="gameCanvas"></canvas>
+    <button id="restartButton">Prøv Igen</button>
+    <div id="messageBox" class="message-box" style="display: none;"></div>
+
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const restartButton = document.getElementById('restartButton');
+        const startButton = document.getElementById('startButton');
+        const startScreen = document.getElementById('startScreen');
+        const messageBox = document.getElementById('messageBox');
+        let player, enemies, bullets, keys, weaponPickup, letter, obstacles, ammoPickups;
+        let gameState = 'start';
+        const playerSpeed = 3;
+        const playerRadius = 12;
+        const playerMaxHp = 100; // Player HP
+        const playerBulletDamage = 20; // Damage player bullets deal
+        const bulletSpeed = 7;
+        const playerBulletRadius = 3;
+        const enemyBulletRadius = 4; // Slightly larger enemy bullets
+        const enemyBulletDamage = 25; // Damage enemy bullets deal
+        const enemySpeed = 1.1;
+        const enemyChaseSpeed = 1.7;
+        const enemyRadius = 12;
+        const numEnemies = 10;
+        const enemyMaxHp = 100; // Enemy HP
+        const enemyDetectionRadius = 300;
+        const enemyPatrolDistance = 150;
+        const playerShootCooldown = 300;
+        const enemyShootCooldown = 1500; // Cooldown for enemy shooting (ms)
+        let lastPlayerShotTime = 0;
+        const numAmmoPickups = 8;
+        let mouseX = 0;
+        let mouseY = 0;
+
+        const startRoom = { x: 0, y: 0, width: 100, height: 100, wallThickness: 5 };
+        const startRoomExit = { y: startRoom.y + startRoom.height * 0.3, height: startRoom.height * 0.4 };
+
+        function resizeCanvas() { canvas.width = window.innerWidth; canvas.height = window.innerHeight; }
+        function checkCircleCollision(c1, c2) { const d = Math.hypot(c1.x-c2.x, c1.y-c2.y); return d < c1.radius + c2.radius; }
+        function checkCircleRectCollision(circle, rect) { const cX = Math.max(rect.x, Math.min(circle.x, rect.x + rect.width)); const cY = Math.max(rect.y, Math.min(circle.y, rect.y + rect.height)); const d = Math.hypot(circle.x-cX, circle.y-cY); return d < circle.radius; }
+        function isPositionValid(x, y, radius, checkObstacles = true, checkStartRoom = true) { if (x - radius < 0 || x + radius > canvas.width || y - radius < 0 || y + radius > canvas.height) return false; if (checkObstacles) { for (const obs of obstacles) { if (checkCircleRectCollision({ x, y, radius }, obs)) return false; } } if (checkStartRoom && x + radius > startRoom.x && x - radius < startRoom.x + startRoom.width && y + radius > startRoom.y && y - radius < startRoom.y + startRoom.height) return false; return true; }
+        function isRectPositionValid(x, y, width, height, checkObstacles = true, checkStartRoom = true) { const rect = { x, y, width, height }; if (x < 0 || x + width > canvas.width || y < 0 || y + height > canvas.height) return false; if (checkObstacles) { for (const obs of obstacles) { if (x < obs.x + obs.width && x + width > obs.x && y < obs.y + obs.height && y + height > obs.y) return false; } } if (checkStartRoom && x < startRoom.x + startRoom.width && x + width > startRoom.x && y < startRoom.y + startRoom.height && y + height > startRoom.y) return false; if (weaponPickup && x < weaponPickup.x + weaponPickup.radius && x + width > weaponPickup.x - weaponPickup.radius && y < weaponPickup.y + weaponPickup.radius && y + height > weaponPickup.y - weaponPickup.radius) return false; return true; }
+
+        // Function to check if a line segment intersects a rectangle
+        function intersectsRect(p1, p2, rect) {
+            // Find the min and max x and y for the line segment
+            const minX = Math.min(p1.x, p2.x);
+            const maxX = Math.max(p1.x, p2.x);
+            const minY = Math.min(p1.y, p2.y);
+            const maxY = Math.max(p1.y, p2.y);
+
+            // Find the min and max x and y for the rectangle
+            const rectMinX = rect.x;
+            const rectMaxX = rect.x + rect.width;
+            const rectMinY = rect.y;
+            const rectMaxY = rect.y + rect.height;
+
+            // Check for intersection of bounding boxes
+            if (maxX < rectMinX || minX > rectMaxX || maxY < rectMinY || minY > rectMaxY) {
+                return false; // Bounding boxes do not overlap
+            }
+
+            // Check if any endpoint of the line segment is inside the rectangle
+            if (p1.x > rectMinX && p1.x < rectMaxX && p1.y > rectMinY && p1.y < rectMaxY) return true;
+            if (p2.x > rectMinX && p2.x < rectMaxX && p2.y > rectMinY && p2.y < rectMaxY) return true;
+
+            // Check for intersection of the line segment with each of the rectangle's sides
+            // Side 1: Top edge (rectMinX, rectMinY) to (rectMaxX, rectMinY)
+            if (intersectsLineSegments(p1, p2, {x: rectMinX, y: rectMinY}, {x: rectMaxX, y: rectMinY})) return true;
+            // Side 2: Bottom edge (rectMinX, rectMaxY) to (rectMaxX, rectMaxY)
+            if (intersectsLineSegments(p1, p2, {x: rectMinX, y: rectMaxY}, {x: rectMaxX, y: rectMaxY})) return true;
+            // Side 3: Left edge (rectMinX, rectMinY) to (rectMinX, rectMaxY)
+            if (intersectsLineSegments(p1, p2, {x: rectMinX, y: rectMinY}, {x: rectMinX, y: rectMaxY})) return true;
+            // Side 4: Right edge (rectMaxX, rectMinY) to (rectMaxX, rectMaxY)
+            if (intersectsLineSegments(p1, p2, {x: rectMaxX, y: rectMinY}, {x: rectMaxX, y: rectMaxY})) return true;
+
+            return false; // No intersection
+        }
+
+        // Function to check if two line segments intersect
+        function intersectsLineSegments(p1, p2, p3, p4) {
+            // Calculate the direction vectors of the lines
+            const v1 = { x: p2.x - p1.x, y: p2.y - p1.y };
+            const v2 = { x: p4.x - p3.x, y: p4.y - p3.y };
+
+            // Calculate the determinant
+            const det = v1.x * v2.y - v1.y * v2.x;
+
+            // If the determinant is zero, the lines are parallel
+            if (det === 0) {
+                return false;
+            }
+
+            // Calculate the parameters for the intersection point
+            const t = ((p3.x - p1.x) * v2.y - (p3.y - p1.y) * v2.x) / det;
+            const u = ((p3.x - p1.x) * v1.y - (p3.y - p1.y) * v1.x) / det;
+
+            // Check if the intersection point lies within both line segments
+            if (t >= 0 && t <= 1 && u >= 0 && u <= 1) {
+                return true;
+            }
+
+            return false;
+        }
+
+        // Function to check line of sight between two points considering obstacles
+        function hasLineOfSight(p1, p2, obstacles) {
+            // Check if any obstacle intersects the line segment between p1 and p2
+            for (const obs of obstacles) {
+                if (intersectsRect(p1, p2, obs)) {
+                    return false; // Line of sight is blocked by this obstacle
+                }
+            }
+            return true; // No obstacle found blocking the view
+        }
+
+
+        function initializeGame() {
+            resizeCanvas();
+            // Player
+            player = {
+                x: startRoom.x + startRoom.width / 2, y: startRoom.y + startRoom.height / 2,
+                radius: playerRadius, hp: playerMaxHp, maxHp: playerMaxHp,
+                ammo: 30, score: 0, hasWeapon: false
+            };
+            // Obstacles (More obstacles added)
+            obstacles = [
+                { x: canvas.width * 0.2, y: canvas.height * 0.3, width: 30, height: 150, color: '#777' },
+                { x: canvas.width * 0.7, y: canvas.height * 0.6, width: 200, height: 30, color: '#777' },
+                { x: canvas.width * 0.5, y: canvas.height * 0.1, width: 30, height: 100, color: '#777' },
+                { x: 150, y: canvas.height - 100, width: 150, height: 25, color: '#777' },
+                { x: canvas.width * 0.1, y: canvas.height * 0.6, width: 150, height: 200, color: '#666' },
+                { x: canvas.width * 0.8, y: canvas.height * 0.1, width: 180, height: 120, color: '#666' },
+                { x: canvas.width * 0.4, y: canvas.height * 0.5, width: 250, height: 40, color: '#707070' },
+                // Added new obstacles (houses)
+                { x: canvas.width * 0.3, y: canvas.height * 0.75, width: 80, height: 80, color: '#555' },
+                { x: canvas.width * 0.6, y: canvas.height * 0.2, width: 100, height: 100, color: '#555' },
+                { x: canvas.width * 0.1, y: canvas.height * 0.1, width: 60, height: 60, color: '#555' },
+                { x: canvas.width * 0.85, y: canvas.height * 0.8, width: 70, height: 70, color: '#555' },
+                // Add start room walls as obstacles explicitly (excluding the exit section)
+                { x: startRoom.x, y: startRoom.y, width: startRoom.width, height: startRoom.wallThickness, color: '#555' }, // Top wall
+                { x: startRoom.x, y: startRoom.y + startRoom.height - startRoom.wallThickness, width: startRoom.width, height: startRoom.wallThickness, color: '#555' }, // Bottom wall
+                { x: startRoom.x, y: startRoom.y, width: startRoom.wallThickness, height: startRoom.height, color: '#555' }, // Left wall
+                { x: startRoom.x + startRoom.width - startRoom.wallThickness, y: startRoom.y, width: startRoom.wallThickness, height: startRoomExit.y - startRoom.y, color: '#555' }, // Right wall (top part)
+                { x: startRoom.x + startRoom.width - startRoom.wallThickness, y: startRoomExit.y + startRoomExit.height, width: startRoom.wallThickness, height: startRoom.height - (startRoomExit.y + startRoomExit.height), color: '#555' } // Right wall (bottom part)
+            ];
+
+             // Note: Removed the filter that excluded obstacles overlapping the start room exit,
+             // as the exit is now handled separately by not adding it as an obstacle segment
+             // and the player movement logic will need adjustment to allow passing through the exit.
+
+            // Weapon Pickup
+            let wpX, wpY;
+            do { wpX = startRoom.x + startRoom.wallThickness + Math.random() * (startRoom.width - 2 * startRoom.wallThickness - 20) + 10; wpY = startRoom.y + startRoom.wallThickness + Math.random() * (startRoom.height - 2 * startRoom.wallThickness - 20) + 10; } while (!isPositionValid(wpX, wpY, 10, false, false));
+            weaponPickup = { x: wpX, y: wpY, radius: 8, color: 'gold' };
+
+            // Ammo Pickups
+            ammoPickups = [];
+            for (let i = 0; i < numAmmoPickups; i++) { let ammoX, ammoY; const ammoSize = 10; do { ammoX = Math.random() * (canvas.width - ammoSize); ammoY = Math.random() * (canvas.height - ammoSize); } while (!isRectPositionValid(ammoX, ammoY, ammoSize, ammoSize, true, true)); ammoPickups.push({ x: ammoX, y: ammoY, width: ammoSize, height: ammoSize, color: 'yellow', points: 25, ammo: 20 }); }
+
+            // Letter
+            letter = null;
+            // Enemies
+            enemies = [];
+            for (let i = 0; i < numEnemies; i++) {
+                spawnEnemy();
+            }
+
+            bullets = [];
+            // Single array for all bullets
+            keys = {};
+            gameState = 'playing';
+            restartButton.style.display = 'none';
+            restartButton.textContent = "Prøv Igen";
+            messageBox.style.display = 'none';
+            lastPlayerShotTime = 0;
+        }
+
+        function spawnEnemy() {
+            let enemyX, enemyY;
+            do {
+                enemyX = Math.random() * canvas.width;
+                enemyY = Math.random() * canvas.height;
+            } while (!isPositionValid(enemyX, enemyY, enemyRadius, true, true));
+            enemies.push({
+                x: enemyX, y: enemyY, radius: enemyRadius,
+                hp: enemyMaxHp, maxHp: enemyMaxHp,
+                state: 'patrol',
+                patrolTargetX: enemyX + (Math.random() - 0.5) * enemyPatrolDistance * 2,
+                patrolTargetY: enemyY + (Math.random() - 0.5) * enemyPatrolDistance * 2,
+                lastShotTime: 0
+            });
+        }
+
+        // --- Event Listeners ---
+        window.addEventListener('keydown', (e) => keys[e.key.toLowerCase()] = true);
+        window.addEventListener('keyup', (e) => keys[e.key.toLowerCase()] = false);
+        window.addEventListener('resize', resizeCanvas);
+        // Modified restartButton event listener to redirect
+        restartButton.addEventListener('click', () => {
+            window.location.href = 'index.html';
+        });
+        startButton.addEventListener('click', () => { startScreen.style.display = 'none'; initializeGame(); gameLoop(); });
+
+        canvas.addEventListener('mousemove', (e) => {
+            mouseX = e.clientX;
+            mouseY = e.clientY;
+        });
+
+        canvas.addEventListener('mousedown', (e) => {
+            if (gameState === 'playing' && player.hasWeapon && player.ammo > 0 && Date.now() - lastPlayerShotTime > playerShootCooldown) {
+                if (e.button === 0) { // Left mouse button
+                    const angle = Math.atan2(mouseY - player.y, mouseX - player.x);
+                    bullets.push({
+                        x: player.x, y: player.y, radius: playerBulletRadius,
+                        isPlayerBullet: true,
+                        dx: Math.cos(angle) * bulletSpeed,
+                        dy: Math.sin(angle) * bulletSpeed
+                    });
+                    player.ammo--;
+                    lastPlayerShotTime = Date.now();
+                }
+            }
+        });
+
+
+        function update() {
+            if (gameState !== 'playing') return;
+            const now = Date.now();
+
+            // --- Player Movement ---
+            let moveX = 0, moveY = 0;
+            if (keys['w'] || keys['arrowup']) moveY = -1; if (keys['s'] || keys['arrowdown']) moveY = 1;
+            if (keys['a'] || keys['arrowleft']) moveX = -1; if (keys['d'] || keys['arrowright']) moveX = 1;
+            let magnitude = Math.hypot(moveX, moveY);
+            let dx = 0, dy = 0; if (magnitude > 0) { dx = (moveX / magnitude) * playerSpeed; dy = (moveY / magnitude) * playerSpeed; }
+            let nextX = player.x + dx, nextY = player.y + dy;
+            let canMoveX = true, canMoveY = true;
+
+            const proposedPlayerX = { x: nextX, y: player.y, radius: player.radius };
+            const proposedPlayerY = { x: player.x, y: nextY, radius: player.radius };
+
+            // Check collision with canvas bounds
+            if (nextX - player.radius < 0 || nextX + player.radius > canvas.width) canMoveX = false;
+            if (nextY - player.radius < 0 || nextY + player.radius > canvas.height) canMoveY = false;
+
+            // Check collision with all obstacles (including start room walls now), except the exit
+            for (const obs of obstacles) {
+                 const isStartRoomExit = obs.x === startRoom.x + startRoom.width - startRoom.wallThickness &&
+                                         obs.y >= startRoomExit.y &&
+                                         obs.y + obs.height <= startRoomExit.y + startRoomExit.height;
+
+                 if (!isStartRoomExit) { // Only check collision with non-exit obstacles
+                    if (checkCircleRectCollision(proposedPlayerX, obs)) canMoveX = false;
+                    if (checkCircleRectCollision(proposedPlayerY, obs)) canMoveY = false;
+                 }
+            }
+
+
+            if (canMoveX) player.x = nextX;
+            if (canMoveY) player.y = nextY;
+
+
+            // --- Bullet Update & Collision ---
+            bullets = bullets.filter(bullet => {
+                let keepBullet = true;
+
+                // --- Bullet Movement ---
+                bullet.x += bullet.dx;
+                bullet.y += bullet.dy;
+
+                 // --- Off-screen Check ---
+                 if (bullet.y + bullet.radius < 0 || bullet.y - bullet.radius > canvas.height ||
+                     bullet.x + bullet.radius < 0 || bullet.x - bullet.radius > canvas.width) {
+                     keepBullet = false;
+                 }
+
+                 // --- Obstacle Collision Check ---
+                 if (keepBullet) {
+                    for (const obs of obstacles) {
+                        if (checkCircleRectCollision(bullet, obs)) {
+                            keepBullet = false;
+                            break;
+                        }
+                    }
+                 }
+
+                // --- Target Collision Check ---
+                if (keepBullet) {
+                    if (bullet.isPlayerBullet) {
+                        // Check collision with enemies
+                        for (let i = enemies.length - 1; i >= 0; i--) {
+                            const enemy = enemies[i];
+                            if (checkCircleCollision(bullet, enemy)) {
+                                enemy.hp -= playerBulletDamage; // Enemy takes damage
+                                keepBullet = false; // Remove bullet
+
+                                // --- Enemy Retaliation ---
+                                if (enemy.hp > 0 && enemy.state !== 'chase') {
+                                    enemy.state = 'chase'; // Enemy chases player if hit
+                                }
+
+                                if (enemy.hp <= 0) {
+                                    player.score += 100;
+                                    const wasLastEnemy = enemies.length === 1;
+                                    const enemyX = enemy.x; const enemyY = enemy.y;
+                                    enemies.splice(i, 1); // Remove enemy
+                                    if (wasLastEnemy) {
+                                        letter = { x: enemyX, y: enemyY, radius: 10, color: 'white' };
+                                    }
+                                }
+                                break;
+                            }
+                        }
+                    } else { // Enemy bullet
+                        // Check collision with player
+                        if (checkCircleCollision(bullet, player)) {
+                            player.hp -= enemyBulletDamage; // Player takes damage
+                            keepBullet = false; // Remove bullet
+                            if (player.hp <= 0) {
+                                player.hp = 0; // Prevent negative HP display
+                                gameState = 'gameOver';
+                                messageBox.textContent = `Game Over! Score: ${player.score}`;
+                                messageBox.style.display = 'block';
+                                restartButton.style.display = 'block';
+                                // Positioning for game over - keep centered
+                                restartButton.style.top = '50%';
+                                restartButton.style.transform = 'translate(-50%, -50%)';
+                            }
+                        }
+                    }
+                }
+
+                return keepBullet;
+            });
+
+
+            // --- Enemy Update ---
+            enemies.forEach(enemy => {
+                // AI State & Movement
+                const distToPlayer = Math.hypot(player.x - enemy.x, player.y - enemy.y);
+                // Keep existing state change based on distance, but hitting now also triggers chase
+                if (distToPlayer < enemyDetectionRadius && enemy.state === 'patrol') { enemy.state = 'chase'; }
+                else if (distToPlayer >= enemyDetectionRadius && enemy.state === 'chase') { enemy.state = 'patrol'; enemy.patrolTargetX = enemy.x + (Math.random() - 0.5) * enemyPatrolDistance * 2; enemy.patrolTargetY = enemy.y + (Math.random() - 0.5) * enemyPatrolDistance * 2; }
+
+
+                let targetX, targetY, currentSpeed;
+                if (enemy.state === 'chase') { targetX = player.x; targetY = player.y; currentSpeed = enemyChaseSpeed; }
+                else { targetX = enemy.patrolTargetX; targetY = enemy.patrolTargetY; currentSpeed = enemySpeed; const distToTarget = Math.hypot(targetX - enemy.x, targetY - enemy.y); if (distToTarget < enemy.radius * 2) { enemy.patrolTargetX = enemy.x + (Math.random() - 0.5) * enemyPatrolDistance * 2; enemy.patrolTargetY = enemy.y + (Math.random() - 0.5) * enemyPatrolDistance * 2; targetX = enemy.patrolTargetX; targetY = enemy.patrolTargetY; } }
+
+                const angle = Math.atan2(targetY - enemy.y, targetX - enemy.x);
+                let enemyDX = Math.cos(angle) * currentSpeed;
+                let enemyDY = Math.sin(angle) * currentSpeed;
+                let nextEnemyX = enemy.x + enemyDX;
+                let nextEnemyY = enemy.y + enemyDY;
+
+                let enemyCanMoveX = true;
+                let enemyCanMoveY = true;
+
+                const proposedEnemyX = { x: nextEnemyX, y: enemy.y, radius: enemy.radius };
+                const proposedEnemyY = { x: enemy.x, y: nextEnemyY, radius: enemy.radius };
+
+                if (nextEnemyX - enemy.radius < 0 || nextEnemyX + enemy.radius > canvas.width) enemyCanMoveX = false;
+                if (nextEnemyY - enemy.radius < 0 || nextEnemyY + enemy.radius > canvas.height) enemyCanMoveY = false;
+
+                 // Enemy collision with obstacles
+                 for (const obs of obstacles) {
+                     if (checkCircleRectCollision(proposedEnemyX, obs)) enemyCanMoveX = false;
+                     if (checkCircleRectCollision(proposedEnemyY, obs)) enemyCanMoveY = false;
+                 }
+
+
+                if (enemyCanMoveX) enemy.x = nextEnemyX;
+                if (enemyCanMoveY) enemy.y = nextEnemyY;
+
+
+                // --- Enemy Shooting ---
+                // Enemy only shoots if in chase state and canShoot is true based on visibility rules
+                if (enemy.state === 'chase' && Date.now() - enemy.lastShotTime > enemyShootCooldown) {
+                    let canShoot = true;
+
+                    const playerInStartRoom = player.x > startRoom.x && player.x < startRoom.x + startRoom.width &&
+                                             player.y > startRoom.y && player.y < startRoom.y + startRoom.height;
+                    const enemyInStartRoom = enemy.x > startRoom.x && enemy.x < startRoom.x + startRoom.width &&
+                                             enemy.y > startRoom.y && enemy.y < startRoom.y + startRoom.height;
+
+                    if (playerInStartRoom !== enemyInStartRoom) { // One is inside, the other is outside the start room
+                        // Check if the line of sight goes through the start room exit
+                        const startRoomExitRect = {
+                            x: startRoom.x + startRoom.width - startRoom.wallThickness,
+                            y: startRoomExit.y,
+                            width: startRoom.wallThickness,
+                            height: startRoomExit.height
+                        };
+                        if (!intersectsRect(enemy, player, startRoomExitRect)) {
+                            // If the line to the player does NOT intersect the exit, it must be blocked by a wall
+                            canShoot = false;
+                        }
+                    } else if (!playerInStartRoom && !enemyInStartRoom) { // Both are outside the start room
+                         // Use general line of sight for obstacles outside the start room
+                         if (!hasLineOfSight(enemy, player, obstacles)) {
+                             canShoot = false;
+                         }
+                    }
+                    // If both are in the start room, they can shoot each other (assuming no inner obstacles added)
+
+
+                    if (canShoot) {
+                        const shootAngle = Math.atan2(player.y - enemy.y, player.x - enemy.x);
+                        const bulletSpeedMultiplier = 0.8;
+                        bullets.push({
+                            x: enemy.x, y: enemy.y, radius: enemyBulletRadius,
+                            isPlayerBullet: false,
+                            dx: Math.cos(shootAngle) * bulletSpeed * bulletSpeedMultiplier,
+                            dy: Math.sin(shootAngle) * bulletSpeed * bulletSpeedMultiplier
+                        });
+                        enemy.lastShotTime = now;
+                    }
+                }
+
+                // Collision with Player (Physical contact damage)
+                 if (checkCircleCollision(player, enemy)) {
+                     const knockbackAngle = Math.atan2(player.y - enemy.y, player.x - enemy.x);
+                     const knockbackStrength = 1;
+                     player.x += Math.cos(knockbackAngle) * knockbackStrength;
+                     player.y += Math.sin(knockbackAngle) * knockbackStrength;
+                     enemy.x -= Math.cos(knockbackAngle) * knockbackStrength;
+                     enemy.y -= Math.sin(knockbackAngle) * knockbackStrength;
+                 }
+            }); // End enemy loop
+
+            // --- Pickup Collisions ---
+            if (weaponPickup && !player.hasWeapon && checkCircleCollision(player, weaponPickup)) { player.hasWeapon = true; weaponPickup = null; }
+            for (let i = ammoPickups.length - 1; i >= 0; i--) { const pickup = ammoPickups[i]; if (checkCircleRectCollision(player, pickup)) { player.ammo += pickup.ammo; player.score += pickup.points; ammoPickups.splice(i, 1); } }
+            if (letter && checkCircleCollision(player, letter)) {
+                gameState = 'win';
+                letter = null;
+                messageBox.innerHTML = `Tillykke, soldat.<br>Du har nu indsamlet de vigtige informationer, vi havde brug for.<br>Du skal nu komme sikkert hjem.<br><br>Final Score: ${player.score}`;
+                messageBox.style.display = 'block';
+                restartButton.textContent = "Spil Igen?";
+                restartButton.style.display = 'block';
+
+                // Positioning for win state (below message box)
+                 setTimeout(() => {
+                    const messageBoxRect = messageBox.getBoundingClientRect();
+                    restartButton.style.top = `${messageBoxRect.bottom + 20}px`;
+                    restartButton.style.left = '50%';
+                    restartButton.style.transform = 'translateX(-50%)';
+                 }, 0);
+
+            }
+
+        } // End of update()
+
+        function draw() {
+            // Clear canvas & Draw Background/Start Room/Obstacles
+            ctx.fillStyle = "#cccccc";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = "#555";
+            // Draw start room walls explicitly for drawing purposes
+             ctx.fillRect(startRoom.x, startRoom.y, startRoom.width, startRoom.wallThickness); // Top wall
+             ctx.fillRect(startRoom.x, startRoom.y + startRoom.height - startRoom.wallThickness, startRoom.width, startRoom.wallThickness); // Bottom wall
+             ctx.fillRect(startRoom.x, startRoom.y, startRoom.wallThickness, startRoom.height); // Left wall
+             ctx.fillRect(startRoom.x + startRoom.width - startRoom.wallThickness, startRoom.y, startRoom.wallThickness, startRoomExit.y - startRoom.y); // Right wall (top part)
+             ctx.fillRect(startRoom.x + startRoom.width - startRoom.wallThickness, startRoomExit.y + startRoomExit.height, startRoom.wallThickness, startRoom.height - (startRoomExit.y + startRoomExit.height)); // Right wall (bottom part)
+
+            obstacles.forEach(obs => {
+                 // Don't draw start room walls again as they are drawn explicitly above
+                 const isStartRoomWall = (obs.x === startRoom.x && obs.y === startRoom.y && obs.width === startRoom.width && obs.height === startRoom.wallThickness) ||
+                                         (obs.x === startRoom.x && obs.y === startRoom.y + startRoom.height - startRoom.wallThickness && obs.width === startRoom.width && obs.height === startRoom.wallThickness) ||
+                                         (obs.x === startRoom.x && obs.y === startRoom.y && obs.width === startRoom.wallThickness && obs.height === startRoom.height) ||
+                                         (obs.x === startRoom.x + startRoom.width - startRoom.wallThickness && obs.y === startRoom.y && obs.width === startRoom.wallThickness && obs.height === startRoomExit.y - startRoom.y) ||
+                                         (obs.x === startRoom.x + startRoom.width - startRoom.wallThickness && obs.y === startRoomExit.y + startRoomExit.height && obs.width === startRoom.wallThickness && obs.height === startRoom.height - (startRoomExit.y + startRoomExit.height));
+
+                 if (!isStartRoomWall) {
+                     ctx.fillStyle = obs.color;
+                     ctx.fillRect(obs.x, obs.y, obs.width, obs.height);
+                 }
+            });
+
+            // Draw Pickups (Ammo, Weapon, Letter)
+            ammoPickups.forEach(pickup => { ctx.fillStyle = pickup.color; ctx.fillRect(pickup.x, pickup.y, pickup.width, pickup.height); ctx.strokeStyle = 'black'; ctx.strokeRect(pickup.x, pickup.y, pickup.width, pickup.height); });
+            if (weaponPickup) {
+                ctx.fillStyle = weaponPickup.color;
+                ctx.beginPath();
+                ctx.arc(weaponPickup.x, weaponPickup.y, weaponPickup.radius, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.fillStyle = "black";
+                ctx.font = "bold 10px sans-serif";
+                ctx.textAlign = "center";
+                ctx.textBaseline = "middle";
+                ctx.fillText("W", weaponPickup.x, weaponPickup.y);
+            }
+            if (letter) {
+                ctx.fillStyle = letter.color;
+                ctx.beginPath();
+                ctx.arc(letter.x, letter.y, letter.radius, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.strokeStyle = 'black';
+                ctx.lineWidth = 1;
+                const letterW = letter.radius * 1.4, letterH = letter.radius;
+                ctx.strokeRect(letter.x - letterW / 2, letter.y - letterH / 2, letterW, letterH);
+                ctx.beginPath();
+                ctx.moveTo(letter.x - letterW / 2, letter.y - letterH / 2);
+                ctx.lineTo(letter.x, letter.y);
+                ctx.lineTo(letter.x + letterW / 2, letter.y - letterH / 2);
+                ctx.stroke();
+            }
+
+
+            // Draw Player
+            ctx.fillStyle = 'blue';
+            ctx.beginPath();
+            ctx.arc(player.x, player.y, player.radius, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Draw Weapon (follows mouse)
+            if (player.hasWeapon) {
+                ctx.strokeStyle = 'black';
+                ctx.lineWidth = 3;
+                ctx.beginPath();
+                ctx.moveTo(player.x, player.y);
+                const angle = Math.atan2(mouseY - player.y, mouseX - player.x);
+                const weaponLength = player.radius + 10; // Length of the weapon line
+                const weaponX = player.x + Math.cos(angle) * weaponLength;
+                const weaponY = player.y + Math.sin(angle) * weaponLength;
+                ctx.lineTo(weaponX, weaponY);
+                ctx.stroke();
+            }
+
+            // Draw Bullets
+            bullets.forEach(bullet => {
+                ctx.fillStyle = bullet.isPlayerBullet ? 'darkred' : 'yellow';
+                ctx.beginPath();
+                ctx.arc(bullet.x, bullet.y, bullet.radius, 0, Math.PI * 2);
+                ctx.fill();
+                if (!bullet.isPlayerBullet) {
+                    ctx.strokeStyle = 'black';
+                    ctx.lineWidth = 1;
+                    ctx.stroke();
+                }
+            });
+
+            // Draw Enemies (Only if visible - has line of sight)
+            enemies.forEach(enemy => {
+                 // Check line of sight before drawing - using the same logic as for shooting
+                 let isVisible = true;
+                 const playerInStartRoom = player.x > startRoom.x && player.x < startRoom.x + startRoom.width &&
+                                          player.y > startRoom.y && player.y < startRoom.y + startRoom.height;
+                 const enemyInStartRoom = enemy.x > startRoom.x && enemy.x < startRoom.x + startRoom.width &&
+                                          enemy.y > startRoom.y && enemy.y < startRoom.y + startRoom.height;
+
+                 if (playerInStartRoom !== enemyInStartRoom) { // One is inside, the other is outside the start room
+                     const startRoomExitRect = {
+                         x: startRoom.x + startRoom.width - startRoom.wallThickness,
+                         y: startRoomExit.y,
+                         width: startRoom.wallThickness,
+                         height: startRoomExit.height
+                     };
+                     if (!intersectsRect(enemy, player, startRoomExitRect)) {
+                         isVisible = false;
+                     }
+                 } else if (!playerInStartRoom && !enemyInStartRoom) { // Both are outside the start room
+                      if (!hasLineOfSight(enemy, player, obstacles)) {
+                          isVisible = false;
+                      }
+                 }
+                 // If both are in the start room, they are visible to each other
+
+                 if (isVisible) {
+                    ctx.fillStyle = enemy.state === 'chase' ? 'orange' : 'limegreen';
+                    ctx.beginPath();
+                    ctx.arc(enemy.x, enemy.y, enemy.radius, 0, Math.PI * 2);
+                    ctx.fill();
+                    // HP Bar
+                    const hpBarWidth = enemy.radius * 2;
+                    const hpBarHeight = 5;
+                    const hpBarX = enemy.x - enemy.radius;
+                    const hpBarY = enemy.y - enemy.radius - hpBarHeight - 8;
+                    ctx.fillStyle = "#db5a5a";
+                    ctx.fillRect(hpBarX, hpBarY, hpBarWidth, hpBarHeight);
+                    const currentHpWidth = Math.max(0, (enemy.hp / enemy.maxHp) * hpBarWidth);
+                    ctx.fillStyle = "#32cd32";
+                    ctx.fillRect(hpBarX, hpBarY, currentHpWidth, hpBarHeight);
+                    // Status Indicator
+                    ctx.fillStyle = 'black';
+                    ctx.font = 'bold 10px sans-serif';
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'bottom';
+                    ctx.fillText(enemy.state === 'chase' ? 'C' : 'P', enemy.x, hpBarY - 1);
+                 }
+            });
+
+            // Draw UI
+            if (gameState === 'playing' || gameState === 'gameOver' || gameState === 'win') {
+                ctx.fillStyle = "black";
+                ctx.font = "18px Arial";
+                ctx.textAlign = "left";
+                ctx.textBaseline = "alphabetic";
+                let ammoText = player.hasWeapon ? `Ammo: ${player.ammo}` : "Ammo: - (Find W)";
+                ctx.fillText(`HP: ${player.hp}/${player.maxHp} | ${ammoText} | Fjender: ${enemies.length} | Score: ${player.score}`, 10, 25);
+            }
+        } // End of draw()
+
+        // --- Game Loop & Restart ---
+        function gameLoop() { if (gameState === 'start') { /* Wait */ } else if (gameState === 'playing') { update(); draw(); requestAnimationFrame(gameLoop); } else { draw(); } }
+        function restartGame() { initializeGame(); gameLoop(); }
+
+        resizeCanvas(); // Initial setup
+
+    </script>
+</body>
+</html>
